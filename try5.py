@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 随机森林建模与交互面板 - 韧性指数分析（预计算缓存版）
+修复路径问题 + 散点图警告 + 可调节表格行数
 """
 
 import pandas as pd
@@ -18,25 +19,30 @@ import os
 
 warnings.filterwarnings('ignore')
 
-# ==================== 缓存文件路径（与恢复指数区分） ====================
-IMPORTANCE_CACHE = "importance_resilience_cache.csv"
-METRICS_CACHE = "metrics_resilience_cache.csv"
-INDUSTRY_CORR_CACHE = "industry_corr_resilience_cache.csv"
-PROVINCE_CORR_CACHE = "province_corr_resilience_cache.csv"
-DATA_CACHE = "data_resilience_cached.parquet"
+# ==================== 获取脚本所在目录（重要！） ====================
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# ==================== 缓存文件路径（基于脚本目录，与恢复指数区分） ====================
+IMPORTANCE_CACHE = os.path.join(BASE_DIR, "importance_resilience_cache.csv")
+METRICS_CACHE = os.path.join(BASE_DIR, "metrics_resilience_cache.csv")
+INDUSTRY_CORR_CACHE = os.path.join(BASE_DIR, "industry_corr_resilience_cache.csv")
+PROVINCE_CORR_CACHE = os.path.join(BASE_DIR, "province_corr_resilience_cache.csv")
+DATA_CACHE = os.path.join(BASE_DIR, "data_resilience_cached.parquet")
+EXCEL_PATH = os.path.join(BASE_DIR, "resilience_final.xlsx")
 
 
 # ==================== 1. 数据加载与预处理 ====================
 @st.cache_data
 def load_and_preprocess():
-    df = pd.read_excel('resilience_final.xlsx', sheet_name='Sheet1')
+    if not os.path.exists(EXCEL_PATH):
+        st.error(f"找不到数据文件: {EXCEL_PATH}。请确保 resilience_final.xlsx 已上传。")
+        st.stop()
+    df = pd.read_excel(EXCEL_PATH, sheet_name='Sheet1')
 
-    # 提取年月
     if '年月' in df.columns:
         df['year'] = df['年月'] // 100
         df['month'] = df['年月'] % 100
 
-    # 选择特征列
     feature_cols = [
         '对美国进口比例', '对美国出口比例', '对美国贸易比例',
         'GDP', 'GDP_pc', 'Population', 'Elderly', 'Third',
@@ -46,7 +52,6 @@ def load_and_preprocess():
     industry_col = '商品编码'
     province_col = '注册地编码'
 
-    # 删除缺失值
     df = df.dropna(subset=[target_col])
     df = df.dropna(subset=feature_cols)
 
@@ -56,7 +61,6 @@ def load_and_preprocess():
     X = df[feature_cols + [industry_col, province_col]]
     y = df[target_col]
 
-    # 预处理器
     categorical_features = [industry_col, province_col]
     numeric_features = feature_cols
     preprocessor = ColumnTransformer(
@@ -113,7 +117,6 @@ def run_analysis_and_save(n_iter=300):
         all_r2.append(r2)
         all_rmse.append(rmse)
 
-        # 计算每个行业/省份的相关系数
         for ind in industries:
             sub = X_test[X_test['商品编码'] == ind].copy()
             if len(sub) > 5:
@@ -128,18 +131,15 @@ def run_analysis_and_save(n_iter=300):
     progress_bar.empty()
     status_text.empty()
 
-    # 平均重要性
     avg_importances = np.mean(all_importances, axis=0)
     importance_df = pd.DataFrame({'feature': feature_names, 'importance': avg_importances})
     importance_df = importance_df.sort_values('importance', ascending=False)
 
-    # 性能指标
     avg_r2 = np.mean(all_r2)
     avg_rmse = np.mean(all_rmse)
     std_r2 = np.std(all_r2)
     std_rmse = np.std(all_rmse)
 
-    # 行业/省份相关系数
     industry_corr_avg = {k: np.mean(v) for k, v in industry_corr.items() if v}
     industry_corr_df = pd.DataFrame(list(industry_corr_avg.items()), columns=['行业', 'correlation'])
     industry_corr_df = industry_corr_df.sort_values('correlation', ascending=False)
@@ -148,7 +148,6 @@ def run_analysis_and_save(n_iter=300):
     province_corr_df = pd.DataFrame(list(province_corr_avg.items()), columns=['省份', 'correlation'])
     province_corr_df = province_corr_df.sort_values('correlation', ascending=False)
 
-    # 保存到 CSV
     importance_df.to_csv(IMPORTANCE_CACHE, index=False)
     pd.DataFrame([{
         'avg_r2': avg_r2,
@@ -158,8 +157,6 @@ def run_analysis_and_save(n_iter=300):
     }]).to_csv(METRICS_CACHE, index=False)
     industry_corr_df.to_csv(INDUSTRY_CORR_CACHE, index=False)
     province_corr_df.to_csv(PROVINCE_CORR_CACHE, index=False)
-
-    # 保存预处理后的完整数据
     df_raw.to_parquet(DATA_CACHE, index=False)
 
     print("韧性指数分析：所有缓存文件已保存完成。")
@@ -188,7 +185,6 @@ def main():
     st.title("分省分行业韧性指数影响因素分析")
     st.markdown("基于随机森林（300次重复随机划分）分析韧性指数的影响因素，并识别受美国影响最大的行业与省份。")
 
-    # 检查是否存在所有缓存文件
     cache_exists = all(os.path.exists(f) for f in [
         IMPORTANCE_CACHE, METRICS_CACHE, INDUSTRY_CORR_CACHE, PROVINCE_CORR_CACHE, DATA_CACHE
     ])
@@ -205,7 +201,6 @@ def main():
         st.session_state.province_corr_df = province_corr_df
         st.session_state.df_raw = df_raw
     else:
-        # 直接加载缓存
         with st.spinner("加载预计算结果中..."):
             (importance_df, perf, industry_corr_df, province_corr_df, df_raw) = load_cached_results()
         st.session_state.analyzed = True
@@ -216,7 +211,6 @@ def main():
         st.session_state.df_raw = df_raw
         st.info("已加载预计算结果，无需重新建模。")
 
-    # 展示结果
     if st.session_state.get('analyzed', False):
         importance_df = st.session_state.importance_df
         (avg_r2, std_r2, avg_rmse, std_rmse) = st.session_state.perf
@@ -247,27 +241,39 @@ def main():
                           labels={'correlation': '相关系数', '省份': '省份（注册地编码）'})
         st.plotly_chart(fig_prov, use_container_width=True)
 
+        # ==================== 散点图 + 数据缺失警告 ====================
         st.subheader("具体行业/省份关系探索")
         col1, col2 = st.columns(2)
+
         with col1:
             selected_industry = st.selectbox("选择行业（商品编码）", options=industry_corr_df['行业'].tolist())
-            industry_data = df_raw[df_raw['商品编码'].astype(str) == selected_industry]
+            industry_data = df_raw[df_raw['商品编码'].astype(str) == str(selected_industry)]
             if not industry_data.empty:
                 fig_scatter = px.scatter(industry_data, x='对美国贸易比例', y='韧性指数',
                                          title=f"行业 {selected_industry} 美国贸易比例 vs 韧性指数",
                                          trendline="ols")
                 st.plotly_chart(fig_scatter, use_container_width=True)
+            else:
+                st.warning(f"⚠️ 行业 {selected_industry} 在数据中没有对应的记录，无法绘制散点图。")
+
         with col2:
             selected_province = st.selectbox("选择省份（注册地编码）", options=province_corr_df['省份'].tolist())
-            province_data = df_raw[df_raw['注册地编码'].astype(str) == selected_province]
+            province_data = df_raw[df_raw['注册地编码'].astype(str) == str(selected_province)]
             if not province_data.empty:
                 fig_scatter2 = px.scatter(province_data, x='对美国贸易比例', y='韧性指数',
                                           title=f"省份 {selected_province} 美国贸易比例 vs 韧性指数",
                                           trendline="ols")
                 st.plotly_chart(fig_scatter2, use_container_width=True)
+            else:
+                st.warning(f"⚠️ 省份 {selected_province} 在数据中没有对应的记录，无法绘制散点图。")
 
+        # ==================== 可调节表格行数 ====================
         st.subheader("数据预览")
-        st.dataframe(df_raw.head(100))
+        max_rows = len(df_raw)
+        n_rows = st.slider("显示行数", min_value=10, max_value=min(1000, max_rows), value=100, step=10)
+        st.dataframe(df_raw.head(n_rows))
+        st.caption(f"共 {max_rows} 行数据，当前显示前 {n_rows} 行。")
+
     else:
         st.info("等待分析结果...")
 
